@@ -54,46 +54,39 @@ run_script() {
 show_dynamic_menu() {
     local menu_title="$1"
     local script_folder="$2"
-    local options=()
-    
-    # Read script files from the specified folder
-    while IFS= read -r -d $'\0' file; do
-        options+=("$(basename "$file" .sh)")
-    done < <(find "$script_folder" -maxdepth 1 -type f -name "*.sh" -print0)
 
-    if [ ${#options[@]} -eq 0 ]; then
-        echo -e "${YELLOW}No scripts found in '$script_folder'.${NC}"
-        press_enter_to_continue
-        return
-    fi
+    # Loop for the sub-menu
+    while true; do
+        clear
+        print_header "$menu_title"
+        
+        local options=()
+        # Read script files from the specified folder
+        while IFS= read -r -d $'\0' file; do
+            options+=("$(basename "$file" .sh)")
+        done < <(find "$script_folder" -maxdepth 1 -type f -name "*.sh" -print0 2>/dev/null | sort -z)
 
-    print_header "$menu_title"
-    
-    # Add a "Go Back" option
-    options+=("Go Back")
-
-    select opt in "${options[@]}"; do
-        if [[ "$opt" == "Go Back" ]]; then
-            break
-        elif [[ -n "$opt" ]]; then
-            local script_path="$script_folder/$opt.sh"
-            run_script "$script_path"
-            # After running a script, redisplay the menu
-            print_header "$menu_title"
-            select opt_again in "${options[@]}"; do
-                 if [[ "$opt_again" == "Go Back" ]]; then
-                    break
-                 elif [[ -n "$opt_again" ]]; then
-                    local script_path_again="$script_folder/$opt_again.sh"
-                    run_script "$script_path_again"
-                 else
-                    echo -e "${RED}Invalid option. Please try again.${NC}"
-                 fi
-            done
-            break 
-        else
-            echo -e "${RED}Invalid option. Please try again.${NC}"
+        if [ ${#options[@]} -eq 0 ]; then
+            echo -e "${YELLOW}No scripts found in '$script_folder'.${NC}"
+            press_enter_to_continue
+            return
         fi
+
+        options+=("Go Back")
+
+        select opt in "${options[@]}"; do
+            if [[ "$opt" == "Go Back" ]]; then
+                return # Exit the function to go back to the main menu
+            elif [[ -n "$opt" ]]; then
+                local script_path="$script_folder/$opt.sh"
+                run_script "$script_path"
+                break # Break from select to redisplay this sub-menu
+            else
+                echo -e "${RED}Invalid option. Please try again.${NC}"
+                press_enter_to_continue
+                break # Break from select to redisplay this sub-menu
+            fi
+        done
     done
 }
 
@@ -121,7 +114,7 @@ sync_repo() {
     fi
     # Set correct permissions for all scripts in the subdirectories
     if [ -d "$SCRIPT_DIR/scripts" ]; then
-        sudo chmod +x "$SCRIPT_DIR"/scripts/**/*.sh
+        sudo chmod +x "$SCRIPT_DIR"/scripts/**/*.sh 2>/dev/null
     fi
     press_enter_to_continue
 }
