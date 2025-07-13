@@ -8,8 +8,8 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # --- Configuration ---
-# Replace with your actual GitHub repository URL
-GITHUB_REPO="https://github.com/your-username/your-repo.git"
+# Your actual GitHub repository URL
+GITHUB_REPO="https://github.com/vinnyNC/server_setup.git"
 # The local directory where the repository will be cloned
 SCRIPT_DIR="/opt/ubuntu-setup-scripts"
 
@@ -119,8 +119,10 @@ sync_repo() {
             echo -e "${RED}Failed to update repository.${NC}"
         fi
     fi
-    # Set correct permissions for all scripts
-    sudo chmod +x $SCRIPT_DIR/scripts/**/*.sh
+    # Set correct permissions for all scripts in the subdirectories
+    if [ -d "$SCRIPT_DIR/scripts" ]; then
+        sudo chmod +x "$SCRIPT_DIR"/scripts/**/*.sh
+    fi
     press_enter_to_continue
 }
 
