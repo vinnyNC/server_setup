@@ -2,7 +2,7 @@
 #
 # Enterprise Provisioner - Main Script
 # Author: Your Name
-# Version: 1.0.0
+# Version: 1.1.0
 #
 # This script provides a menu-driven interface to provision and manage servers.
 # It is designed to be idempotent, stateful, and easily extensible.
@@ -34,6 +34,8 @@ log() {
     local message="$2"
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    # Ensure log file exists and is writable
+    touch "${LOG_FILE}"
     echo -e "${timestamp} [${level}] - ${message}" | tee -a "${LOG_FILE}"
 }
 
@@ -42,6 +44,10 @@ log() {
 load_config() {
     if [[ ! -f "${CONFIG_FILE}" ]]; then
         log "ERROR" "Configuration file not found at ${CONFIG_FILE}!"
+        # Use whiptail for user-facing error if available
+        if command -v whiptail &> /dev/null; then
+            whiptail --title "Configuration Error" --msgbox "Configuration file not found at ${CONFIG_FILE}. Please run the installer again." 8 78
+        fi
         exit 1
     fi
     # Source the config file to load variables
@@ -54,6 +60,8 @@ load_config() {
 # Checks if a module has been successfully run.
 check_state() {
     local module_id="$1"
+    # Ensure the state file exists before trying to read it
+    touch "${STATE_FILE}"
     grep -q "^${module_id}$" "${STATE_FILE}"
 }
 
@@ -71,6 +79,9 @@ update_state() {
 sync_repo() {
     whiptail --title "Syncing Repository" --infobox "Contacting GitHub..." 8 78
     log "INFO" "Starting repository sync from ${GIT_REPO_URL}."
+
+    # Ensure parent directory exists
+    mkdir -p "${MODULE_REPO_DIR}"
 
     if [[ ! -d "${MODULE_REPO_DIR}/.git" ]]; then
         log "INFO" "Cloning repository for the first time."
@@ -116,19 +127,15 @@ run_module() {
 
     log "INFO" "Executing module: ${full_module_id}"
     
-    # Show a progress gauge during execution
-    {
-        # Execute the script, redirecting its output for the gauge
-        if bash "${module_path}"; then
-            # On success, update the state
-            update_state "${full_module_id}"
-            log "INFO" "Module '${full_module_id}' completed successfully."
-            whiptail --title "Execution Success" --msgbox "Module '${module_id}' ran successfully." 8 78
-        else
-            log "ERROR" "Module '${full_module_id}' failed during execution. Check logs for details."
-            whiptail --title "Execution Failed" --msgbox "Module '${module_id}' failed. Please check the log file: ${LOG_FILE}" 10 78
-        fi
-    } | whiptail --title "Running Module" --gauge "Executing '${module_id}'... Please wait." 8 78 0
+    # Execute the script and show a message box with the log tail on completion.
+    if bash "${module_path}" >> "${LOG_FILE}" 2>&1; then
+        update_state "${full_module_id}"
+        log "INFO" "Module '${full_module_id}' completed successfully."
+        whiptail --title "Execution Success" --msgbox "Module '${module_id}' ran successfully. View log for details." 8 78
+    else
+        log "ERROR" "Module '${full_module_id}' failed during execution."
+        whiptail --title "Execution Failed" --msgbox "Module '${module_id}' failed. Please check the log file for details: ${LOG_FILE}" 10 78
+    fi
 }
 
 # --- UI Menus ---
@@ -139,10 +146,10 @@ show_module_menu() {
     
     local whiptail_options=()
     local module_files
-    mapfile -d '' module_files < <(find "${category_dir}" -maxdepth 1 -type f -name "*.sh" -print0 | sort -z)
+    mapfile -d '' module_files < <(find "${category_dir}" -maxdepth 1 -type f -name "*.sh" -print0 2>/dev/null | sort -z)
 
     if [[ ${#module_files[@]} -eq 0 ]]; then
-        whiptail --title "No Modules Found" --msgbox "No modules were found in this category." 8 78
+        whiptail --title "No Modules Found" --msgbox "No modules were found in this category. Make sure the repository is synced and contains modules." 10 78
         return
     fi
     
@@ -158,7 +165,6 @@ show_module_menu() {
             status="[X]" # Completed
         fi
         
-        # Try to read description from a .meta file
         local meta_file="${module_path%.sh}.meta"
         local description="No description available."
         if [[ -f "${meta_file}" ]]; then
@@ -168,12 +174,6 @@ show_module_menu() {
         whiptail_options+=("${module_id}" "${status} ${description}")
     done
 
-    if [[ ${#whiptail_options[@]} -eq 0 ]]; then
-        whiptail --title "Error" --msgbox "Could not build menu options." 8 78
-        return
-    fi
-
-    # Loop for the sub-menu
     while true; do
         CHOICE=$(whiptail --title "${menu_title}" --menu "Choose a module to run" 20 78 12 "${whiptail_options[@]}" 3>&1 1>&2 2>&3)
         
@@ -182,8 +182,7 @@ show_module_menu() {
         fi
 
         run_module "${category_dir}/${CHOICE}.sh"
-        # After running, we return to the main menu. To stay in the sub-menu, remove the 'return'
-        # and instead re-generate the whiptail_options array to reflect the new state.
+        # We return to the main menu after each action.
         return 
     done
 }
@@ -199,7 +198,6 @@ main_menu() {
             "5" "View Execution Log" \
             "6" "Exit" 3>&1 1>&2 2>&3)
 
-        # Check exit status
         if [[ $? -ne 0 ]]; then
             CHOICE=6 # Exit on Cancel
         fi
@@ -229,6 +227,12 @@ main() {
 
     # Load configuration
     load_config
+
+    # On the very first run, automatically clone the repo before showing the menu.
+    if [[ ! -d "${MODULE_REPO_DIR}/.git" ]]; then
+        log "INFO" "First run detected. Automatically cloning modules repository..."
+        sync_repo
+    fi
 
     # Start the main menu
     main_menu
