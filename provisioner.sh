@@ -27,6 +27,41 @@ readonly C_YELLOW='\033[1;33m'
 readonly C_BLUE='\033[0;34m'
 readonly C_NC='\033[0m' # No Color
 
+# --- Dependency Checks ---
+# Check for required commands
+check_dependencies() {
+    local missing_deps=()
+    
+    for cmd in git whiptail; do
+        if ! command -v "$cmd" &> /dev/null; then
+            missing_deps+=("$cmd")
+        fi
+    done
+    
+    if [[ ${#missing_deps[@]} -gt 0 ]]; then
+        echo "ERROR: Missing required dependencies: ${missing_deps[*]}" >&2
+        echo "Please install the missing packages and try again." >&2
+        exit 1
+    fi
+}
+
+# --- Directory Setup ---
+# Ensure required directories exist with proper permissions
+setup_directories() {
+    local dirs=(
+        "$(dirname "${CONFIG_FILE}")"
+        "$(dirname "${STATE_FILE}")"
+        "$(dirname "${LOG_FILE}")"
+    )
+    
+    for dir in "${dirs[@]}"; do
+        if [[ ! -d "$dir" ]]; then
+            mkdir -p "$dir"
+            chmod 755 "$dir"
+        fi
+    done
+}
+
 # --- Logging ---
 # A robust logging function.
 log() {
@@ -34,9 +69,13 @@ log() {
     local message="$2"
     local timestamp
     timestamp=$(date "+%Y-%m-%d %H:%M:%S")
+    
     # Ensure log file exists and is writable
-    # This might fail if permissions are incorrect, but running as root should mitigate this.
-    touch -a "${LOG_FILE}"
+    if [[ ! -f "${LOG_FILE}" ]]; then
+        touch "${LOG_FILE}"
+        chmod 644 "${LOG_FILE}"
+    fi
+    
     echo -e "${timestamp} [${level}] - ${message}" | tee -a "${LOG_FILE}"
 }
 
@@ -52,7 +91,7 @@ load_config() {
         exit 1
     fi
     # Source the config file to load variables
-    # shellcheck source=/etc/provisioner/config.conf
+    # shellcheck disable=SC1090
     source "${CONFIG_FILE}"
     log "INFO" "Configuration loaded from ${CONFIG_FILE}."
 }
@@ -62,19 +101,27 @@ load_config() {
 check_state() {
     local module_id="$1"
     # Ensure the state file exists before trying to read it
-    touch -a "${STATE_FILE}"
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        touch "${STATE_FILE}"
+        chmod 644 "${STATE_FILE}"
+    fi
     # The 'grep' command will exit with 1 if not found, which is the expected
     # behavior for use in an 'if' or '||' condition. Errexit is not triggered here.
-    grep -q "^${module_id}$" "${STATE_FILE}"
+    grep -q "^${module_id}$" "${STATE_FILE}" 2>/dev/null || return 1
 }
 
 # Updates the state file to mark a module as completed.
 update_state() {
     local module_id="$1"
     # Ensure the state file exists
-    touch -a "${STATE_FILE}"
+    if [[ ! -f "${STATE_FILE}" ]]; then
+        touch "${STATE_FILE}"
+        chmod 644 "${STATE_FILE}"
+    fi
     # Add the module if it's not already there
-    check_state "${module_id}" || echo "${module_id}" >> "${STATE_FILE}"
+    if ! check_state "${module_id}"; then
+        echo "${module_id}" >> "${STATE_FILE}"
+    fi
 }
 
 # --- Core Logic ---
@@ -147,6 +194,11 @@ show_module_menu() {
     local category_dir="$1"
     local menu_title="$2"
 
+    if [[ ! -d "${category_dir}" ]]; then
+        whiptail --title "Directory Not Found" --msgbox "Module directory '${category_dir}' does not exist.\n\nMake sure the repository is synced properly." 10 78
+        return
+    fi
+
     local whiptail_options=()
     # Safely find all modules using NUL delimiters
     local module_files
@@ -178,7 +230,7 @@ show_module_menu() {
         if [[ -f "${meta_file}" ]]; then
             # The result is checked to ensure we only update the description if one was actually found.
             local found_desc
-            found_desc=$(grep 'description:' "${meta_file}" | cut -d: -f2- | xargs || true)
+            found_desc=$(grep 'description:' "${meta_file}" | cut -d: -f2- | xargs 2>/dev/null || true)
             if [[ -n "${found_desc}" ]]; then
                 description="${found_desc}"
             fi
@@ -221,7 +273,13 @@ main_menu() {
             2) show_module_menu "${MODULE_REPO_DIR}/setup" "Server Setup Modules" ;;
             3) show_module_menu "${MODULE_REPO_DIR}/tools" "Common Tools Modules" ;;
             4) sync_repo ;;
-            5) whiptail --title "Execution Log" --textbox "${LOG_FILE}" 20 78 --scrolltext ;;
+            5) 
+                if [[ -f "${LOG_FILE}" && -s "${LOG_FILE}" ]]; then
+                    whiptail --title "Execution Log" --textbox "${LOG_FILE}" 20 78 --scrolltext
+                else
+                    whiptail --title "Execution Log" --msgbox "Log file is empty or does not exist." 8 78
+                fi
+                ;;
             6)
                 log "INFO" "User exited the provisioner."
                 echo -e "${C_BLUE}Goodbye!${C_NC}"
@@ -233,18 +291,23 @@ main_menu() {
 
 # --- Script Entry Point ---
 main() {
+    # Check for required dependencies first
+    check_dependencies
+
     # Ensure script is run as root
     if [[ $EUID -ne 0 ]]; then
        # A direct echo is more reliable for user feedback before exiting.
        echo "ERROR: This script must be run as root." >&2
-       log "ERROR" "This script must be run as root."
        exit 1
     fi
+
+    # Setup required directories
+    setup_directories
 
     # Load configuration. The script will exit if this fails.
     load_config
 
-    # --- ADDED: Configuration Validation ---
+    # --- Configuration Validation ---
     # Check if the critical variables from the config file are actually set.
     # Using ':-""}' provides a default empty value to prevent 'nounset' error if var doesn't exist.
     if [[ -z "${GIT_REPO_URL:-""}" || -z "${MODULE_REPO_DIR:-""}" ]]; then
