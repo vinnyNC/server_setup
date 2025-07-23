@@ -145,13 +145,29 @@ sync_repo() {
         fi
     else
         log "INFO" "Repository exists. Pulling latest changes."
-        # Use -C to avoid changing the script's CWD (current working directory)
-        if git -C "${MODULE_REPO_DIR}" pull; then
+        # First, ensure we're in a clean state
+        if git -C "${MODULE_REPO_DIR}" status --porcelain | grep -q .; then
+            log "WARN" "Repository has local changes. Stashing them before pull."
+            git -C "${MODULE_REPO_DIR}" stash push -m "Auto-stash before provisioner sync $(date)"
+        fi
+        
+        # Reset to HEAD to ensure clean state
+        git -C "${MODULE_REPO_DIR}" reset --hard HEAD
+        
+        # Pull the latest changes
+        if git -C "${MODULE_REPO_DIR}" pull origin main; then
             log "INFO" "Repository updated successfully."
             whiptail --title "Sync Success" --msgbox "Repository updated successfully." 8 78
         else
-            log "WARN" "Failed to pull updates from repository. It might be offline or you have local changes."
-            whiptail --title "Sync Warning" --msgbox "Could not pull updates. Check logs for details." 8 78
+            log "WARN" "Failed to pull updates from repository. Trying to fetch and reset."
+            # Try a more aggressive approach
+            if git -C "${MODULE_REPO_DIR}" fetch origin && git -C "${MODULE_REPO_DIR}" reset --hard origin/main; then
+                log "INFO" "Repository forcibly updated successfully."
+                whiptail --title "Sync Success" --msgbox "Repository updated successfully (forced update)." 8 78
+            else
+                log "ERROR" "Failed to sync repository even with force. Manual intervention may be required."
+                whiptail --title "Sync Failed" --msgbox "Could not sync repository. Check logs and network connectivity." 8 78
+            fi
         fi
     fi
     # Ensure all module scripts are executable
@@ -269,9 +285,9 @@ main_menu() {
         fi
 
         case "$CHOICE" in
-            1) show_module_menu "${MODULE_REPO_DIR}/install" "Package Installation Modules" ;;
-            2) show_module_menu "${MODULE_REPO_DIR}/setup" "Server Setup Modules" ;;
-            3) show_module_menu "${MODULE_REPO_DIR}/tools" "Common Tools Modules" ;;
+            1) show_module_menu "${MODULE_REPO_DIR}/modules/install" "Package Installation Modules" ;;
+            2) show_module_menu "${MODULE_REPO_DIR}/modules/setup" "Server Setup Modules" ;;
+            3) show_module_menu "${MODULE_REPO_DIR}/modules/tools" "Common Tools Modules" ;;
             4) sync_repo ;;
             5) 
                 if [[ -f "${LOG_FILE}" && -s "${LOG_FILE}" ]]; then

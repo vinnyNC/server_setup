@@ -1,0 +1,4 @@
+# Meta file for the 'docker' module
+
+# The description will be shown next to the module name in the menu.
+description: Installs Docker and Docker Compose from official repository.

@@ -1,0 +1,4 @@
+# Meta file for the 'nginx' module
+
+# The description will be shown next to the module name in the menu.
+description: Installs and configures NGINX web server.
