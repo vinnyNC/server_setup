@@ -1,10 +1,14 @@
 #!/bin/bash
 #
 # Enterprise Provisioner - Bootstrapper
+# Version: 1.1.0
 #
-# This script prepares a fresh Ubuntu server to use the provisioner.
+# This script prepares a fresh Ubuntu/Debian server to use the provisioner.
 # It installs dependencies, creates the required directory structure,
 # downloads the main script and configuration, and launches the provisioner.
+#
+# Usage: sudo bash install.sh
+# Requirements: Ubuntu/Debian system with internet connectivity
 #
 
 # --- Strict Mode ---
@@ -21,21 +25,81 @@ log_step() {
     echo "--- $1 ---"
 }
 
+log_error() {
+    echo "ERROR: $1" >&2
+}
+
+log_info() {
+    echo "INFO: $1"
+}
+
+# Download a file with error handling and basic validation
+download_file() {
+    local url="$1"
+    local destination="$2"
+    local description="$3"
+    
+    log_step "Downloading $description..."
+    
+    if ! curl -sSLf --connect-timeout 30 --max-time 300 "$url" -o "$destination"; then
+        log_error "Failed to download $description from $url"
+        return 1
+    fi
+    
+    # Basic validation - check if file exists and is not empty
+    if [[ ! -f "$destination" ]] || [[ ! -s "$destination" ]]; then
+        log_error "Downloaded file $destination is empty or doesn't exist"
+        return 1
+    fi
+    
+    log_info "Successfully downloaded $description to $destination"
+    return 0
+}
+
+# Cleanup function for error scenarios
+cleanup_on_error() {
+    local exit_code=$?
+    log_error "Installation failed with exit code $exit_code. Cleaning up..."
+    
+    # Remove potentially corrupted downloads
+    [[ -f /usr/local/bin/provisioner ]] && rm -f /usr/local/bin/provisioner
+    [[ -f /etc/provisioner/config.conf ]] && rm -f /etc/provisioner/config.conf
+    
+    log_info "Cleanup completed. Please fix the issues and try again."
+    exit $exit_code
+}
+
+# Set up error trap
+trap cleanup_on_error ERR
+
 # --- Main Logic ---
 main() {
     log_step "Starting Provisioner Bootstrap Process"
 
     # 1. Check for root privileges
     if [[ $EUID -ne 0 ]]; then
-       echo "This script must be run as root. Please use sudo."
+       log_error "This script must be run as root. Please use sudo."
        exit 1
     fi
 
+    # 1.1. Check if we're on a supported system
+    if [[ ! -f /etc/debian_version ]] && [[ ! -f /etc/ubuntu_version ]]; then
+        log_error "This script is designed for Debian/Ubuntu systems only."
+        exit 1
+    fi
+
+    # 1.2. Check for internet connectivity
+    log_step "Checking internet connectivity..."
+    if ! ping -c 1 8.8.8.8 &> /dev/null; then
+        log_error "No internet connection detected. Please check your network and try again."
+        exit 1
+    fi
+
     # 2. Install dependencies
-    log_step "Updating package lists and installing dependencies (git, whiptail)..."
+    log_step "Updating package lists and installing dependencies (git, whiptail, curl)..."
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -y
-    apt-get install -y git whiptail
+    apt-get install -y git whiptail curl
 
     # 3. Create required directory structure
     log_step "Creating necessary directories..."
@@ -45,18 +109,16 @@ main() {
     mkdir -p /opt
 
     # 4. Download the main provisioner script
-    log_step "Downloading main provisioner script..."
-    if ! curl -sSLf "${PROVISIONER_URL}" -o /usr/local/bin/provisioner; then
-        echo "ERROR: Failed to download provisioner script from ${PROVISIONER_URL}"
+    if ! download_file "${PROVISIONER_URL}" "/usr/local/bin/provisioner" "main provisioner script"; then
+        log_error "Failed to download provisioner script. Please check your internet connection and try again."
         exit 1
     fi
     chmod +x /usr/local/bin/provisioner
 
     # 5. Download the configuration file
-    log_step "Downloading default configuration file..."
     if [[ ! -f /etc/provisioner/config.conf ]]; then
-        if ! curl -sSLf "${CONFIG_URL}" -o /etc/provisioner/config.conf; then
-            echo "ERROR: Failed to download configuration from ${CONFIG_URL}"
+        if ! download_file "${CONFIG_URL}" "/etc/provisioner/config.conf" "default configuration file"; then
+            log_error "Failed to download configuration file. Please check your internet connection and try again."
             exit 1
         fi
     else
@@ -71,7 +133,13 @@ main() {
 
     # 6. Execute the main provisioner script
     # The script will handle the initial repo sync itself.
-    /usr/local/bin/provisioner
+    if [[ -x /usr/local/bin/provisioner ]]; then
+        log_info "Launching provisioner for the first time..."
+        /usr/local/bin/provisioner
+    else
+        log_error "Provisioner script is not executable. Something went wrong during installation."
+        exit 1
+    fi
 }
 
 main "$@"
